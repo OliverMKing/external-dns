@@ -1,6 +1,6 @@
 # Setting up ExternalDNS for Services on AWS
 
-This tutorial describes how to setup ExternalDNS for usage within a Kubernetes cluster on AWS. Make sure to use **>=0.11.0** version of ExternalDNS for this tutorial
+This tutorial describes how to setup ExternalDNS for usage within a Kubernetes cluster on AWS. Make sure to use **>=0.15.0** version of ExternalDNS for this tutorial
 
 ## IAM Policy
 
@@ -63,7 +63,7 @@ export KUBECONFIG="$HOME/.kube/${EKS_CLUSTER_NAME}-${EKS_CLUSTER_REGION}.yaml"
 eksctl create cluster --name $EKS_CLUSTER_NAME --region $EKS_CLUSTER_REGION
 ```
 
-Feel free to use other provisioning tools or an existing cluster.  If [Terraform](https://www.terraform.io/) is used, [vpc](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/) and [eks](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/) modules are recommended for standing up an EKS cluster.  Amazon has a workshop called [Amazon EKS Terraform Workshop](https://tf-eks-workshop.workshop.aws/) that may be useful for this process.
+Feel free to use other provisioning tools or an existing cluster.  If [Terraform](https://www.terraform.io/) is used, [vpc](https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/) and [eks](https://registry.terraform.io/modules/terraform-aws-modules/eks/aws/) modules are recommended for standing up an EKS cluster.  Amazon has a workshop called [Amazon EKS Terraform Workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/afee4679-89af-408b-8108-44f5b1065cc7/) that may be useful for this process.
 
 ## Permissions to modify DNS zone
 
@@ -79,7 +79,7 @@ Additionally, throughout this tutorial, the example domain of `example.com` is u
 
 ### Node IAM Role
 
-In this method, you can attach a policy to the Node IAM Role.  This will allow nodes in the Kubernetes cluster to access Route53 zones, which allows ExternalDNS to update DNS records.  Given that this allows all containers to access Route53, not just ExternalDNS, running on the node with these privileges, this method is not recommended, and is only suitable for limited limited test environments.
+In this method, you can attach a policy to the Node IAM Role.  This will allow nodes in the Kubernetes cluster to access Route53 zones, which allows ExternalDNS to update DNS records.  Given that this allows all containers to access Route53, not just ExternalDNS, running on the node with these privileges, this method is not recommended, and is only suitable for limited test environments.
 
 If you are using eksctl to provision a new cluster, you add the policy at creation time with:
 
@@ -211,10 +211,12 @@ aws iam attach-user-policy --user-name "externaldns" --policy-arn $POLICY_ARN
 
 ```bash
 SECRET_ACCESS_KEY=$(aws iam create-access-key --user-name "externaldns")
-cat <<-EOF > /local/path/to/credentials
+ACCESS_KEY_ID=$(echo $SECRET_ACCESS_KEY | jq -r '.AccessKey.AccessKeyId')
+
+cat <<-EOF > credentials
 
 [default]
-aws_access_key_id = $(echo $SECRET_ACCESS_KEY | jq -r '.AccessKey.AccessKeyId')
+aws_access_key_id = $(echo $ACCESS_KEY_ID)
 aws_secret_access_key = $(echo $SECRET_ACCESS_KEY | jq -r '.AccessKey.SecretAccessKey')
 EOF
 ```
@@ -230,13 +232,21 @@ kubectl create secret generic external-dns \
 
 Follow the steps under [Deploy ExternalDNS](#deploy-externaldns) using either RBAC or non-RBAC.  Make sure to uncomment the section that mounts volumes, so that the credentials can be mounted.
 
+> [!TIP]
+> By default ExternalDNS takes the profile named `default` from the credentials file. If you want to use a different 
+> profile, you can set the environment variable `EXTERNAL_DNS_AWS_PROFILE` to the desired profile name or use the 
+> `--aws-profile` command line argument. It is even possible to use more than one profile at ones, separated by space in
+> the environment variable `EXTERNAL_DNS_AWS_PROFILE` or by using `--aws-profile` multiple times. In this case 
+> ExternalDNS looks for the hosted zones in all profiles and keeps maintaining a mapping table between zone and profile 
+> in order to be able to modify the zones in the correct profile.
+
 ### IAM Roles for Service Accounts
 
 [IRSA](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html) ([IAM roles for Service Accounts](https://docs.aws.amazon.com/eks/latest/userguide/iam-roles-for-service-accounts.html)) allows cluster operators to map AWS IAM Roles to Kubernetes Service Accounts.  This essentially allows only ExternalDNS pods to access Route53 without exposing any static credentials.
 
 This is the preferred method as it implements [PoLP](https://csrc.nist.gov/glossary/term/principle_of_least_privilege) ([Principal of Least Privilege](https://csrc.nist.gov/glossary/term/principle_of_least_privilege)).
 
-**IMPORTANT**: This method requires using KSA (Kuberntes service account) and RBAC.
+**IMPORTANT**: This method requires using KSA (Kubernetes service account) and RBAC.
 
 This method requires deploying with RBAC.  See [Manifest (for clusters with RBAC enabled)](#manifest-for-clusters-with-rbac-enabled) when ready to deploy ExternalDNS.
 
@@ -329,7 +339,7 @@ kubectl patch serviceaccount "external-dns" --namespace ${EXTERNALDNS_NS:-"defau
  "{\"metadata\": { \"annotations\": { \"eks.amazonaws.com/role-arn\": \"$ROLE_ARN\" }}}"
 ```
 
-If any part of this step is misconfigured, such as the role with incorrect namespace configured in the trust relationship, annotation pointing the the wrong role, etc., you will see errors like `WebIdentityErr: failed to retrieve credentials`. Check the configuration and make corrections.  
+If any part of this step is misconfigured, such as the role with incorrect namespace configured in the trust relationship, annotation pointing the the wrong role, etc., you will see errors like `WebIdentityErr: failed to retrieve credentials`. Check the configuration and make corrections.
 
 When the service account annotations are updated, then the current running pods will have to be terminated, so that new pod(s) with proper configuration (environment variables) will be created automatically.
 
@@ -390,7 +400,25 @@ kubectl get namespaces | grep -q $EXTERNALDNS_NS || \
   kubectl create namespace $EXTERNALDNS_NS
 ```
 
-### Manifest (for clusters without RBAC enabled)
+## Using Helm (with OIDC)
+
+Create a values.yaml file to configure ExternalDNS:
+
+```shell
+provider:
+  name: aws
+env:
+  - name: AWS_DEFAULT_REGION
+    value: us-east-1 # change to region where EKS is installed
+```
+
+Finally, install the ExternalDNS chart with Helm using the configuration specified in your values.yaml file:
+
+```shell
+helm upgrade --install external-dns external-dns/external-dns --values values.yaml
+```
+
+### When using clusters without RBAC enabled
 
 Save the following below as `externaldns-no-rbac.yaml`.
 
@@ -414,7 +442,7 @@ spec:
     spec:
       containers:
         - name: external-dns
-          image: registry.k8s.io/external-dns/external-dns:v0.13.5
+          image: registry.k8s.io/external-dns/external-dns:v0.14.2
           args:
             - --source=service
             - --source=ingress
@@ -447,99 +475,40 @@ kubectl create --filename externaldns-no-rbac.yaml \
   --namespace ${EXTERNALDNS_NS:-"default"}
 ```
 
-### Manifest (for clusters with RBAC enabled)
+### When using clusters with RBAC enabled
 
-Save the following below as `externaldns-with-rbac.yaml`.
+If you're using EKS, you can update the `values.yaml` file you created earlier to include the annotations to link the Role ARN you created before.
 
 ```yaml
-# comment out sa if it was previously created
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: external-dns
-  labels:
-    app.kubernetes.io/name: external-dns
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: external-dns
-  labels:
-    app.kubernetes.io/name: external-dns
-rules:
-  - apiGroups: [""]
-    resources: ["services","endpoints","pods","nodes"]
-    verbs: ["get","watch","list"]
-  - apiGroups: ["extensions","networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get","watch","list"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: external-dns-viewer
-  labels:
-    app.kubernetes.io/name: external-dns
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: external-dns
-subjects:
-  - kind: ServiceAccount
-    name: external-dns
-    namespace: default # change to desired namespace: externaldns, kube-addons
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: external-dns
-  labels:
-    app.kubernetes.io/name: external-dns
-spec:
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: external-dns
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: external-dns
-    spec:
-      serviceAccountName: external-dns
-      containers:
-        - name: external-dns
-          image: registry.k8s.io/external-dns/external-dns:v0.13.5
-          args:
-            - --source=service
-            - --source=ingress
-            - --domain-filter=example.com # will make ExternalDNS see only the hosted zones matching provided domain, omit to process all available hosted zones
-            - --provider=aws
-            - --policy=upsert-only # would prevent ExternalDNS from deleting any records, omit to enable full synchronization
-            - --aws-zone-type=public # only look at public hosted zones (valid values are public, private or no value for both)
-            - --registry=txt
-            - --txt-owner-id=external-dns
-          env:
-            - name: AWS_DEFAULT_REGION
-              value: us-east-1 # change to region where EKS is installed
-     # # Uncommend below if using static credentials
-     #        - name: AWS_SHARED_CREDENTIALS_FILE
-     #          value: /.aws/credentials
-     #      volumeMounts:
-     #        - name: aws-credentials
-     #          mountPath: /.aws
-     #          readOnly: true
-     #  volumes:
-     #    - name: aws-credentials
-     #      secret:
-     #        secretName: external-dns
+provider:
+  name: aws
+serviceAccount:
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::${ACCOUNT_ID}:role/${EXTERNALDNS_ROLE_NAME:-"external-dns"}
 ```
 
-When ready deploy:
+If you need to provide credentials directly using a secret (ie. You're not using EKS), you can change the `values.yaml` file to include volume and volume mounts.
 
-```bash
-kubectl create --filename externaldns-with-rbac.yaml \
-  --namespace ${EXTERNALDNS_NS:-"default"}
+```yaml
+provider:
+  name: aws
+env:
+  - name: AWS_SHARED_CREDENTIALS_FILE
+    value: /etc/aws/credentials/my_credentials
+extraVolumes:
+  - name: aws-credentials
+    secret:
+      secretName: external-dns # In this example, the secret will have the data stored in a key named `my_credentials`
+extraVolumeMounts:
+  - name: aws-credentials
+    mountPath: /etc/aws/credentials
+    readOnly: true
+```
+
+When ready, update your Helm installation:
+
+```shell
+helm upgrade --install external-dns external-dns/external-dns --values values.yaml
 ```
 
 ## Arguments
@@ -561,6 +530,15 @@ Annotations which are specific to AWS.
 ### target-hosted-zone
 
 `external-dns.alpha.kubernetes.io/aws-target-hosted-zone` can optionally be set to the ID of a Route53 hosted zone. This will force external-dns to use the specified hosted zone when creating an ALIAS target.
+
+### aws-zone-match-parent
+`aws-zone-match-parent` allows support subdomains within the same zone by using their parent domain, i.e --domain-filter=x.example.com would create a DNS entry for x.example.com (and subdomains thereof).
+
+```yaml
+## hosted zone domain: example.com
+--domain-filter=x.example.com,example.com
+--aws-zone-match-parent
+```
 
 ## Verify ExternalDNS works (Service example)
 
@@ -841,7 +819,7 @@ Note: ExternalDNS does not support creating healthchecks, and assumes that `<hea
 
 When creating ALIAS type records in Route53 it is required that external-dns be aware of the canonical hosted zone in which
 the specified hostname is created. External-dns is able to automatically identify the canonical hosted zone for many
-hostnames based upon known hostname suffixes which are defined in [aws.go](../../provider/aws/aws.go). If a hostname
+hostnames based upon known hostname suffixes which are defined in [aws.go](https://github.com/kubernetes-sigs/external-dns/blob/master/provider/aws/aws.go#L65). If a hostname
 does not have a known suffix then the suffix can be added into `aws.go` or the [target-hosted-zone annotation](#target-hosted-zone)
 can be used to manually define the ID of the canonical hosted zone.
 
@@ -878,6 +856,10 @@ env:
       key: {{ YOUR_SECRET_KEY }}
 ```
 
+## DynamoDB Registry
+
+The DynamoDB Registry can be used to store dns records metadata. See the [DynamoDB Registry Tutorial](../registry/dynamodb.md) for more information.
+
 ## Clean up
 
 Make sure to delete all Service objects before terminating the cluster so all load balancers get cleaned up correctly.
@@ -901,13 +883,17 @@ eksctl delete cluster --name $EKS_CLUSTER_NAME --region $EKS_CLUSTER_REGION
 Give ExternalDNS some time to clean up the DNS records for you. Then delete the hosted zone if you created one for the testing purpose.
 
 ```bash
-aws route53 delete-hosted-zone --id $NODE_ID # e.g /hostedzone/ZEWFWZ4R16P7IB
+aws route53 delete-hosted-zone --id $ZONE_ID # e.g /hostedzone/ZEWFWZ4R16P7IB
 ```
 
 If IAM user credentials were used, you can remove the user with:
 
 ```bash
 aws iam detach-user-policy --user-name "externaldns" --policy-arn $POLICY_ARN
+
+# If static credentials were used
+aws iam delete-access-key --user-name "externaldns" --access-key-id $ACCESS_KEY_ID
+
 aws iam delete-user --user-name "externaldns"
 ```
 
@@ -930,8 +916,11 @@ Route53 has a [5 API requests per second per account hard quota](https://docs.aw
 Running several fast polling ExternalDNS instances in a given account can easily hit that limit. Some ways to reduce the request rate include:
 * Reduce the polling loop's synchronization interval at the possible cost of slower change propagation (but see `--events` below to reduce the impact).
   * `--interval=5m` (default `1m`)
-* Trigger the polling loop on changes to K8s objects, rather than only at `interval`, to have responsive updates with long poll intervals
+* Enable a Cache to store the zone records list. It comes with a cost: slower propagation when the zone gets modified from other sources such as the AWS console, terraform, cloudformation or anything similar.
+  * `--provider-cache-time=15m` (default `0m`)
+* Trigger the polling loop on changes to K8s objects, rather than only at `interval` and ensure a minimum of time between events, to have responsive updates with long poll intervals
   * `--events`
+  * `--min-event-sync-interval=5m` (default `5s`)
 * Limit the [sources watched](https://github.com/kubernetes-sigs/external-dns/blob/master/pkg/apis/externaldns/types.go#L364) when the `--events` flag is specified to specific types, namespaces, labels, or annotations
   * `--source=ingress --source=service` - specify multiple times for multiple sources
   * `--namespace=my-app`
@@ -962,7 +951,7 @@ A simple way to implement randomised startup is with an init container:
     spec:
       initContainers:
       - name: init-jitter
-        image: registry.k8s.io/external-dns/external-dns:v0.13.5
+        image: registry.k8s.io/external-dns/external-dns:v0.14.2
         command:
         - /bin/sh
         - -c
@@ -982,3 +971,19 @@ An effective starting point for EKS with an ingress controller might look like:
 --domain-filter=example.com
 --aws-zones-cache-duration=1h
 ```
+
+### Batch size options
+
+After external-dns generates all changes, it will perform a task to group those changes into batches. Each change will be validated against batch-change-size limits. If at least one of those parameters out of range - the change will be moved to a separate batch. If the change can't fit into any batch - *it will be skipped.*<br>
+There are 3 options to control batch size for AWS provider:
+* Maximum amount of changes added to one batch
+  * `--aws-batch-change-size` (default `1000`)
+* Maximum size of changes in bytes added to one batch
+  * `--aws-batch-change-size-bytes` (default `32000`)
+* Maximum value count of changes added to one batch
+  * `aws-batch-change-size-values` (default `1000`)
+
+`aws-batch-change-size` can be very useful for throttling purposes and can be set to any value.
+
+Default values for flags `aws-batch-change-size-bytes` and `aws-batch-change-size-values` are taken from [AWS documentation](https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/DNSLimitations.html#limits-api-requests) for Route53 API. **You should not change those values until you really have to.** <br>
+Because those limits are in place, `aws-batch-change-size` can be set to any value: Even if your batch size is `4000` records, your change will be split to separate batches due to bytes/values size limits and apply request will be finished without issues.

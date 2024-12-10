@@ -58,6 +58,7 @@ type AzureProvider struct {
 	dryRun                       bool
 	resourceGroup                string
 	userAssignedIdentityClientID string
+	activeDirectoryAuthorityHost string
 	zonesClient                  ZonesClient
 	recordSetsClient             RecordSetsClient
 }
@@ -65,20 +66,21 @@ type AzureProvider struct {
 // NewAzureProvider creates a new Azure provider.
 //
 // Returns the provider or an error if a provider could not be created.
-func NewAzureProvider(configFile string, domainFilter endpoint.DomainFilter, zoneNameFilter endpoint.DomainFilter, zoneIDFilter provider.ZoneIDFilter, resourceGroup string, userAssignedIdentityClientID string, dryRun bool) (*AzureProvider, error) {
-	cfg, err := getConfig(configFile, resourceGroup, userAssignedIdentityClientID)
+func NewAzureProvider(configFile string, domainFilter endpoint.DomainFilter, zoneNameFilter endpoint.DomainFilter, zoneIDFilter provider.ZoneIDFilter, subscriptionID string, resourceGroup string, userAssignedIdentityClientID string, activeDirectoryAuthorityHost string, dryRun bool) (*AzureProvider, error) {
+	cfg, err := getConfig(configFile, subscriptionID, resourceGroup, userAssignedIdentityClientID, activeDirectoryAuthorityHost)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read Azure config file '%s': %v", configFile, err)
 	}
-	cred, err := getCredentials(*cfg)
+	cred, clientOpts, err := getCredentials(*cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get credentials: %w", err)
 	}
-	zonesClient, err := dns.NewZonesClient(cfg.SubscriptionID, cred, nil)
+
+	zonesClient, err := dns.NewZonesClient(cfg.SubscriptionID, cred, clientOpts)
 	if err != nil {
 		return nil, err
 	}
-	recordSetsClient, err := dns.NewRecordSetsClient(cfg.SubscriptionID, cred, nil)
+	recordSetsClient, err := dns.NewRecordSetsClient(cfg.SubscriptionID, cred, clientOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +91,7 @@ func NewAzureProvider(configFile string, domainFilter endpoint.DomainFilter, zon
 		dryRun:                       dryRun,
 		resourceGroup:                cfg.ResourceGroup,
 		userAssignedIdentityClientID: cfg.UserAssignedIdentityID,
+		activeDirectoryAuthorityHost: cfg.ActiveDirectoryAuthorityHost,
 		zonesClient:                  zonesClient,
 		recordSetsClient:             recordSetsClient,
 	}, nil
@@ -108,7 +111,7 @@ func (p *AzureProvider) Records(ctx context.Context) (endpoints []*endpoint.Endp
 		for pager.More() {
 			nextResult, err := pager.NextPage(ctx)
 			if err != nil {
-				return nil, err
+				return nil, provider.NewSoftError(fmt.Errorf("failed to fetch dns records: %w", err))
 			}
 			for _, recordSet := range nextResult.Value {
 				if recordSet.Name == nil || recordSet.Type == nil {
@@ -344,6 +347,19 @@ func (p *AzureProvider) newRecordSet(endpoint *endpoint.Endpoint) (dns.RecordSet
 				ARecords: aRecords,
 			},
 		}, nil
+	case dns.RecordTypeAAAA:
+		aaaaRecords := make([]*dns.AaaaRecord, len(endpoint.Targets))
+		for i, target := range endpoint.Targets {
+			aaaaRecords[i] = &dns.AaaaRecord{
+				IPv6Address: to.Ptr(target),
+			}
+		}
+		return dns.RecordSet{
+			Properties: &dns.RecordSetProperties{
+				TTL:         to.Ptr(ttl),
+				AaaaRecords: aaaaRecords,
+			},
+		}, nil
 	case dns.RecordTypeCNAME:
 		return dns.RecordSet{
 			Properties: &dns.RecordSetProperties{
@@ -406,6 +422,16 @@ func extractAzureTargets(recordSet *dns.RecordSet) []string {
 		targets := make([]string, len(aRecords))
 		for i, aRecord := range aRecords {
 			targets[i] = *aRecord.IPv4Address
+		}
+		return targets
+	}
+
+	// Check for AAAA records
+	aaaaRecords := properties.AaaaRecords
+	if len(aaaaRecords) > 0 && (aaaaRecords)[0].IPv6Address != nil {
+		targets := make([]string, len(aaaaRecords))
+		for i, aaaaRecord := range aaaaRecords {
+			targets[i] = *aaaaRecord.IPv6Address
 		}
 		return targets
 	}

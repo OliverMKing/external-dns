@@ -8,7 +8,6 @@ linters-settings:
   misspell:
     locale: US
   revive:
-    confusing-naming: false
     ignore-generated-header: true
     rules:
       - name: confusing-naming
@@ -70,5 +69,5 @@ issues:
       linters: [ typecheck ]
 
 run:
-  skip-files:
+  exclude-files:
     - endpoint/zz_generated.deepcopy.go

@@ -46,7 +46,7 @@ var (
 // initialized as dns provider with no records
 type InMemoryProvider struct {
 	provider.BaseProvider
-	domain         endpoint.DomainFilter
+	domain         endpoint.DomainFilterInterface
 	client         *inMemoryClient
 	filter         *filter
 	OnApplyChanges func(ctx context.Context, changes *plan.Changes)
@@ -207,6 +207,7 @@ func copyEndpoints(endpoints []*endpoint.Endpoint) []*endpoint.Endpoint {
 		for k, v := range ep.Labels {
 			newEp.Labels[k] = v
 		}
+		newEp.ProviderSpecific = append(endpoint.ProviderSpecific(nil), ep.ProviderSpecific...)
 		records = append(records, newEp)
 	}
 	return records

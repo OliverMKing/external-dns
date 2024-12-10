@@ -28,7 +28,7 @@ ExternalDNS can solve this for you as well.
 
 ### Which DNS providers are supported?
 
-Please check the [provider status table](https://github.com/kubernetes-sigs/external-dns#status-of-providers) for the list of supported providers and their status.
+Please check the [provider status table](https://github.com/kubernetes-sigs/external-dns#status-of-in-tree-providers) for the list of supported providers and their status.
 
 As stated in the README, we are currently looking for stable maintainers for those providers, to ensure that bugfixes and new features will be available for all of those.
 
@@ -178,19 +178,33 @@ You can use the host label in the metric to figure out if the request was agains
 
 Here is the full list of available metrics provided by ExternalDNS:
 
-| Name                                                | Description                                                        | Type    |
-| --------------------------------------------------- | ------------------------------------------------------------------ | ------- |
-| external_dns_controller_last_sync_timestamp_seconds | Timestamp of last successful sync with the DNS provider            | Gauge   |
-| external_dns_registry_endpoints_total               | Number of Endpoints in all sources                                 | Gauge   |
-| external_dns_registry_errors_total                  | Number of Registry errors                                          | Counter |
-| external_dns_source_endpoints_total                 | Number of Endpoints in the registry                                | Gauge   |
-| external_dns_source_errors_total                    | Number of Source errors                                            | Counter |
-| external_dns_controller_verified_aaaa_records       | Number of DNS AAAA-records that exists both in source and registry | Gauge   |
-| external_dns_controller_verified_a_records          | Number of DNS A-records that exists both in source and registry    | Gauge   |
-| external_dns_registry_aaaa_records                  | Number of AAAA records in registry                         | Gauge   |
-| external_dns_registry_a_records                     | Number of A records in registry                         | Gauge   |
-| external_dns_source_aaaa_records                    | Number of AAAA records in source                           | Gauge   |
-| external_dns_source_a_records                       | Number of A records in source                           | Gauge   |
+| Name                                                     | Description                                                        | Type    |
+| -------------------------------------------------------- | ------------------------------------------------------------------ | ------- |
+| external_dns_controller_last_sync_timestamp_seconds      | Timestamp of last successful sync with the DNS provider            | Gauge   |
+| external_dns_controller_last_reconcile_timestamp_seconds | Timestamp of last attempted sync with the DNS provider             | Gauge   |
+| external_dns_registry_endpoints_total                    | Number of Endpoints in all sources                                 | Gauge   |
+| external_dns_registry_errors_total                       | Number of Registry errors                                          | Counter |
+| external_dns_source_endpoints_total                      | Number of Endpoints in the registry                                | Gauge   |
+| external_dns_source_errors_total                         | Number of Source errors                                            | Counter |
+| external_dns_controller_verified_aaaa_records            | Number of DNS AAAA-records that exists both in source and registry | Gauge   |
+| external_dns_controller_verified_a_records               | Number of DNS A-records that exists both in source and registry    | Gauge   |
+| external_dns_registry_aaaa_records                       | Number of AAAA records in registry                                 | Gauge   |
+| external_dns_registry_a_records                          | Number of A records in registry                                    | Gauge   |
+| external_dns_source_aaaa_records                         | Number of AAAA records in source                                   | Gauge   |
+| external_dns_source_a_records                            | Number of A records in source                                      | Gauge   |
+
+
+If you're using the webhook provider, the following additional metrics will be provided:
+
+| Name                                                         | Description                                            | Type    |
+| ------------------------------------------------------------ | ------------------------------------------------------ | ------- |
+| external_dns_webhook_provider_records_errors_total           | Number of errors with the /records method              | Gauge   |
+| external_dns_webhook_provider_records_requests_total         | Number of requests made to the /records method         | Gauge   |
+| external_dns_webhook_provider_applychanges_errors_total      | Number of errors with the /applychanges method         | Gauge   |
+| external_dns_webhook_provider_applychanges_requests_total    | Number of requests made to the /applychanges method    | Gauge   |
+| external_dns_webhook_provider_adjustendpoints_errors_total   | Number of errors with the /adjustendpoints method      | Gauge   |
+| external_dns_webhook_provider_adjustendpoints_requests_total | Number of requests made to the /adjustendpoints method | Gauge   |
+
 
 ### How can I run ExternalDNS under a specific GCP Service Account, e.g. to access DNS records in other projects?
 
@@ -207,7 +221,7 @@ $ docker run \
   -e EXTERNAL_DNS_SOURCE=$'service\ningress' \
   -e EXTERNAL_DNS_PROVIDER=google \
   -e EXTERNAL_DNS_DOMAIN_FILTER=$'foo.com\nbar.com' \
-  registry.k8s.io/external-dns/external-dns:v0.13.5
+  registry.k8s.io/external-dns/external-dns:v0.14.2
 time="2017-08-08T14:10:26Z" level=info msg="config: &{APIServerURL: KubeConfig: Sources:[service ingress] Namespace: ...
 ```
 
@@ -259,7 +273,7 @@ spec:
 Sometimes you need to run an internal and an external dns service.
 The internal one should provision hostnames used on the internal network (perhaps inside a VPC), and the external one to expose DNS to the internet.
 
-To do this with ExternalDNS you can use the `--ingress-class` flag to specifically tie an instance of ExternalDNS to an instance of a ingress controller. 
+To do this with ExternalDNS you can use the `--ingress-class` flag to specifically tie an instance of ExternalDNS to an instance of a ingress controller.
 Let's assume you have two ingress controllers, `internal` and `external`.
 You can then start two ExternalDNS providers, one with `--ingress-class=internal` and one with `--ingress-class=external`.
 
@@ -281,8 +295,8 @@ Note: the `--ingress-class` flag cannot be used at the same time as the `--annot
 **Performance considerations**
 
 Filtering based on ingress class name or annotations means that the external-dns controller will receive all resources of that kind and then filter on the client-side.
-In larger clusters with many resources which change frequently this can cause performance issues. 
-If only some resources need to be managed by an instance of external-dns then label filtering can be used instead of ingress class filtering (or legacy annotation filtering). 
+In larger clusters with many resources which change frequently this can cause performance issues.
+If only some resources need to be managed by an instance of external-dns then label filtering can be used instead of ingress class filtering (or legacy annotation filtering).
 This means that only those resources which match the selector specified in `--label-filter` will be passed to the controller.
 
 ### How do I specify that I want the DNS record to point to either the Node's public or private IP when it has both?
@@ -317,7 +331,7 @@ registry.k8s.io/external-dns/external-dns
 
 As tags, you use the external-dns release of choice(i.e. `v0.7.6`). A `latest` tag is not provided in the container registry.
 
-If you wish to build your own image, you can use the provided [.ko.yaml](../.ko.yaml) as a starting point.
+If you wish to build your own image, you can use the provided [.ko.yaml](https://github.com/kubernetes-sigs/external-dns/blob/master/.ko.yaml) as a starting point.
 
 ### Which architectures are supported?
 
